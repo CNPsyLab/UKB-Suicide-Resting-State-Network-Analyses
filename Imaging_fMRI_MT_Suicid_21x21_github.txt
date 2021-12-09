@@ -1,0 +1,1747 @@
+# Purpose: UK Biobank Imaging Phenotype Extraction, Cleaning, and Analysis
+# Created: 8.7.20
+# Edited:  
+# Modified:
+
+##### Imaging Variables of Interest #####
+#### resting state fMRI ### 
+# 25755 rfMRI component amplitudes, dimension 100
+# 25754 rfMRI component amplitudes, dimention 25
+# 25751 rfMRI full correlation matrix, dimension 100
+# 25750 rfMRI full correlation matrix, dimension 25
+# 25753 rfMRI partial correlation matrix, dimension 100
+# 25752 rfMRI partial correlation matrix, dimension 25
+
+install.packages("dplyr")
+
+install.packages("data.table")
+install.packages ("psych")
+install.packages("moments")
+install.packages("bit64")
+install.packages("plyr")
+install.packages("summarytools")
+install.packages("QuantPsyc")
+
+library(dplyr)
+
+library(data.table)
+library(psych)
+library(moments)
+library(bit64)
+library(summarytools)
+library(QuantPsyc)
+
+#Load 6/2020 imaging covar
+img_cov <- read.table("XX.tab", header=TRUE, sep="\t")
+#takes approximately 2 minutes to read in
+#started at 10:02am - finished by 10:04am
+head(img_cov)
+dim(img_cov) # 502616    230
+
+##READ IN PHENO
+#path from server
+setwd("XX")
+#I do not recommend loading this in via computer
+#read in dataset
+all_pheno <- fread("XX.tab") #automatically detects header and separator
+
+#Subset selfharm variables
+SELFHARM <- all_pheno[,c("f.eid", "f.20483.0.0", "f.20484.0.0", "f.54.2.0", "f.20479.0.0", "f.20485.0.0", "f.20480.0.0", "f.20481.0.0", "f.20437.0.0", "f.20126.0.0")]
+nrow(SELFHARM) # 502,616
+head(SELFHARM) # look at data
+
+#Subset only those with suicide attempt or ideation
+is.na(SELFHARM$f.20483.0.0)<-SELFHARM$f.20483.0.0=="-818"
+is.na(SELFHARM$f.20480.0.0)<-SELFHARM$f.20480.0.0=="-818"
+is.na(SELFHARM$f.20485.0.0)<-SELFHARM$f.20485.0.0=="-818"
+
+#Filter only those with lifetime suicide attempt or thoughts of self-harm (once or more than once)
+SELFHARM$suifilt = 0
+SELFHARM$suifilt[(SELFHARM$f.20483.0.0 == 1) | (SELFHARM$f.20485.0.0 > 0) | !is.na(SELFHARM$f.20480.0.0)] <- 1
+table(SELFHARM$suifilt)
+
+#Subset only those with suicide attempt or ideation
+SELFHARM1 <- subset(SELFHARM, suifilt == "1")
+
+#Remove those who prefer not to answer
+SELFHARM1 <- SELFHARM1[!grepl(-818,SELFHARM1$f.20483.0.0),]
+table(SELFHARM1$f.20485.0.0)
+SELFHARM1 <- SELFHARM1[!grepl(-818,SELFHARM1$f.20480.0.0),]
+table(SELFHARM1$f.20485.0.0)
+SELFHARM1 <- SELFHARM1[!grepl(-818,SELFHARM1$f.20485.0.0),]
+table(SELFHARM1$f.20485.0.0)
+
+#make any SI = 1
+SELFHARM1$f.20485.0.0[(SELFHARM1$f.20485.0.0 > 0)] <- 1
+table(SELFHARM1$f.20485.0.0)
+
+#remove anyone who did not endorse SI
+SELFHARM1 <- SELFHARM1[!grepl(0,SELFHARM1$f.20485.0.0),]
+table(SELFHARM1$f.20485.0.0) 
+table(SELFHARM1$f.20483.0.0)
+
+#NOW ALL YOU HAVE LEFT ARE PEOPLE WHO HAVE AT LEAST IDEATED, THUS 
+#YOU CAN JUST CODE "MISSING" on SUICIDE ATTEMPTS AS NO BECAUSE THEY WERE NOT EVER ADMINISTERED THAT QUESTION B/C THEY NEVER SELF HARMED
+SELFHARM1$f.20483.0.0 <- ifelse(is.na(SELFHARM1$f.20483.0.0), 0, SELFHARM1$f.20483.0.0)
+table(SELFHARM1$f.20483.0.0) #0 == ideated, but did not attempt; 1 = attempted; This is now your primary variable
+
+############################################Read in Covariates###################################
+
+#f.31.0.0             sex (0=female,1=male)
+# f.34.0.0            year of birth
+# f.52.0.0            month of birth
+#f.21000.0.0          ethnicity
+#f.21001.2.0          BMI
+#f.6177.0.0           "medication for cholesterol, blood pressure, or diabetes" (males)
+#f.6153.0.0           "medication for cholesterol, blood pressure, diabetes, or exogenous hormones" (females)
+# f.eid               subj id
+# f.34.0.0            year of birth
+# f.52.0.0            month of birth
+# f.53.0.0            date of attending assessment center (t1)
+# f.53.1.0            date of attending assessment center (t2)
+# f.53.2.0            date of attending assessment center (t3)
+
+#read in pheno dataset, takes a few minutes
+covar <- read.table("XX.tab", header=TRUE, sep="\t")
+head(covar)
+nrow(covar)
+
+###all_pheno <- fread("XX.tab") #automatically detects header and separator - use if read.table doesn't work
+
+##read in dataset of calc age
+AGE <- covar[,c("f.eid", "f.34.0.0", "f.52.0.0", "f.53.0.0", "f.53.1.0", "f.53.2.0")]
+nrow(AGE) # 502,616
+head(AGE) # look at data
+
+table(AGE$f.34.0.0, useNA = "ifany")
+
+AGE$birth_year <- AGE$f.34.0.0
+AGE$birth_month <-AGE$f.52.0.0
+AGE$date_t1 <-AGE$f.53.0.0
+AGE$date_t2 <-AGE$f.53.1.0
+AGE$date_t3 <-AGE$f.53.2.0
+
+ncol(AGE) #11, 6 plus 5 renamed variables
+nrow(AGE) #502616
+head(AGE) 
+
+#write out file containing raw age variables
+#data_file<-AGE
+#fwrite(data_file, "XX.csv", na = ".")
+
+#write out file with renamed variables
+#data_file2<-AGE
+#fwrite(data_file2, "XX.csv", na = ".")
+
+
+### create 2 new variables that are just assessment date month and assessment date year
+
+AGE$t1_year<-as.numeric(substring(AGE$date_t1, 1, 4))
+AGE$t1_month<-as.numeric(substring(AGE$date_t1, 6, 7))
+
+AGE$t2_year<-as.numeric(substring(AGE$date_t2, 1, 4))
+AGE$t2_month<-as.numeric(substring(AGE$date_t2, 6, 7))
+
+AGE$t3_year<-as.numeric(substring(AGE$date_t3, 1, 4))
+AGE$t3_month<-as.numeric(substring(AGE$date_t3, 6, 7))
+
+#check it
+ncol(AGE) #17, 11 plus 6 new variables
+nrow(AGE) #502616
+head(AGE)
+
+#create age variable
+
+#Subtract birth year from each assessment year
+year_dif1 <-ifelse(!is.na(AGE$t1_year), AGE$t1_year-AGE$birth_year, NA)
+year_dif2 <-ifelse(!is.na(AGE$t2_year), AGE$t2_year-AGE$birth_year, NA)
+year_dif3 <-ifelse(!is.na(AGE$t3_year), AGE$t3_year-AGE$birth_year, NA)
+
+#Subtract birth month from each assessment month
+month_dif1 <-ifelse(!is.na(AGE$t1_month), AGE$t1_month-AGE$birth_month, NA)
+month_dif2 <-ifelse(!is.na(AGE$t2_month), AGE$t2_month-AGE$birth_month, NA)
+month_dif3 <-ifelse(!is.na(AGE$t3_month), AGE$t3_month-AGE$birth_month, NA)
+
+#check it
+head(year_dif1)
+head(year_dif2)
+head(year_dif3)
+head(month_dif1)
+head(month_dif2)
+head(month_dif3)
+
+#convert difference of months into decimals
+dec_mo_dif1 <- ifelse(!is.na(month_dif1), (month_dif1/12), NA)
+dec_mo_dif2 <- ifelse(!is.na(month_dif2), (month_dif2/12), NA)
+dec_mo_dif3 <- ifelse(!is.na(month_dif3), (month_dif3/12), NA)
+
+#add decimal value to year difference to get the actual age value
+AGE$age_at_asst1<-year_dif1+dec_mo_dif1
+AGE$age_at_asst2<-year_dif2+dec_mo_dif2
+AGE$age_at_asst3<-year_dif3+dec_mo_dif3
+
+#check it
+ncol(AGE) #20, 17 plus 3 new age_at_asst variables
+nrow(AGE) #still 502616
+head(AGE)
+
+#take a closer look at age_at_asst(s)
+head(AGE$age_at_asst1)
+head(AGE$age_at_asst2)
+head(AGE$age_at_asst3)
+
+#data_file3<-AGE
+#fwrite(data_file3, "XX.csv", na=".")
+
+
+#Subset covariate variables
+covar <- covar[,c("f.eid", "f.31.0.0", "f.21000.0.0", "f.21001.2.0", "f.21001.0.0", "f.21001.1.0" "f.21001.0.0")]
+nrow(covar) # 502,616
+head(covar) # look at data
+
+#Merge AGE with covar
+covar <- merge(covar, AGE, by="f.eid")
+
+##Recode ethnicity variable 0 = WHITE, 1 = NON-WHITE####
+#-1 means "do not know", -3 means "prefer not to answer"
+covar$f.21000.0.0[covar$f.21000.0.0==1001] <- 1
+covar$f.21000.0.0[covar$f.21000.0.0==1002] <- 1
+covar$f.21000.0.0[covar$f.21000.0.0==1003] <- 1
+covar$f.21000.0.0[covar$f.21000.0.0==1] <- 0
+covar$f.21000.0.0[covar$f.21000.0.0==3] <- 2
+covar$f.21000.0.0[covar$f.21000.0.0==4] <- 2
+covar$f.21000.0.0[covar$f.21000.0.0==5] <- 2
+covar$f.21000.0.0[covar$f.21000.0.0==6] <- 2
+covar$f.21000.0.0[covar$f.21000.0.0>1003] <- 2
+covar$f.21000.0.0[covar$f.21000.0.0==2] <- 1
+table(covar$f.21000.0.0)
+
+###exclude missing 
+COVAR <- covar[complete.cases(covar$f.21000.0.0),]
+#Remove do not know/prefer not to answer
+COVAR <- covar[!covar$f.21000.0.0 < 0,]
+nrow(COVAR)
+
+
+
+
+############################################Read in fMRI###################################
+
+#From: https://stackoverflow.com/questions/5758084/loop-in-r-to-read-many-files
+# https://stackoverflow.com/questions/5319839/read-multiple-csv-files-into-separate-data-frames
+# https://stackoverflow.com/questions/38741612/adding-new-column-to-multiple-data-frames-at-the-same-time
+# https://stackoverflow.com/questions/45963831/make-a-list-of-many-objects-from-a-vector-of-object-names
+# https://stackoverflow.com/questions/40805773/join-multiple-dataframes-using-join-all-from-plyr
+#21x21 matrix list https://www.fmrib.ox.ac.uk/datasets/ukbiobank/group_means/edge_list_d25.txt
+#55x55 matrix list https://www.fmrib.ox.ac.uk/datasets/ukbiobank/group_means/edge_list_d100.txt
+
+#setwd("XX/bulk")
+setwd("XXIMAGING/")
+
+#Create a list of file names in the folder based on a pattern
+filenames <- list.files(path="XXIMAGING/",
+                        pattern="*_25752_2_0.txt", full.names = FALSE)
+
+#For loop that imports each file in the "filenames" list, adds it as an object to the environment, and names each object in the following pattern: FILE_[Subject_ID]_25752"
+for (i in filenames){  
+  name <- paste0("FILE_",i)
+  name <- gsub("_2_0.txt","",name)
+  assign(name,read.table(i, header = FALSE))
+} #50 warnings for incomplete final line    
+
+#Create a list named "dat" of the imported dataframes matching the pattern "FILE..."
+dat <- ls(pattern="FILE_")   
+
+#For loop that adds an "f.eid" column to each element of the "dat" list and pastes the ID (taken from the file name) into the new column
+for (i in dat) {      
+  assign(i,transform(get(i),f.eid = (substr(i, 6, 12))))
+}
+
+
+#Create another list named "dat2" of the imported data frames matching the pattern "FILE..."
+dat2 <- mget(ls(pattern = "FILE_"))
+
+#Use plyr join_all to merge all dataframes in the "dat2" list by "f.eid"
+library(plyr)
+rsfMRI <- join_all(dat2, by="f.eid", type="full") #takes several hours
+head(rsfMRI)
+nrow(rsfMRI) #37811
+
+rsfMRI <- rsfMRI[complete.cases(rsfMRI$V1),] #complete cases for neuroimaging data
+nrow(rsfMRI)
+
+#Merge the combined dataframes (rsfMRI) with the SELFHARM1 dataframe by "f.eid"
+#SELFHARM1 <- merge(SELFHARM1, myData, by = "f.eid", all=TRUE)
+#head(SELFHARM1)
+
+
+
+
+##########################################Combine Datasets################################
+
+myData <- merge(rsfMRI,SELFHARM1,by="f.eid")
+nrow(myData)
+
+myData <- merge(myData,covar,by="f.eid")
+nrow(myData)
+
+myData <- myData[complete.cases(myData$V1),] #complete cases for neuroimaging data
+nrow(myData)
+
+myData <- myData[complete.cases(myData$f.20483.0.0),] #complete cases for suicide data
+nrow(myData)
+
+###"ukbiobank_suicide_21x21 DATASET SAVED AT THIS POINT
+#write.csv(myData, "XX.csv")
+
+#############################BASIC DESCRIPTIVE STATISTICS#################################
+
+sum(is.na(myData$f.31.0.0)) #0
+sum(is.na(myData$f.21000.0.0)) #1
+sum(is.na(myData$age_at_asst1)) #0
+sum(is.na(myData$f.21001.0.0)) #3
+
+
+##Demographics
+table(myData$f.31.0.0) #sex
+freq(myData$f.31.0.0)
+table(myData$f.21000.0.0) #ethnicity
+table(myData$f.6138.2.0) #college
+summary(myData$age_at_asst1) #Age
+sd(myData$age_at_asst1)
+summary(myData$f.21001.0.0) #BMI
+sd(myData$f.21001.0.0)
+
+##Compare Demographics by group
+table(myData$f.20483.0.0, myData$f.31.0.0) #sex
+chisq.test(myData$f.20483.0.0, myData$f.31.0.0) #sex
+table(myData$f.20483.0.0, myData$f.21000.0.0) #ethnicity
+chisq.test(myData$f.20483.0.0, myData$f.21000.0.0) #ethicity
+t.test(myData$age_at_asst1~myData$f.20483.0.0) #age
+t.test(myData$f.21001.0.0~myData$f.20483.0.0) #BMI
+
+
+##Self-harm descriptive statistics
+#table(myData$f.20483.0.0) #SA
+#"f.20483.0.0", "f.20484.0.0", "f.54.2.0", "f.20479.0.0", "f.20485.0.0", "f.20480.0.0", "f.20481.0.0", "f.20437.0.0", "f.20126.0.0")
+#f.20484.0.0 : attempted suicide in last year
+#f.54.2.0 : 
+#f.20479.0.0 : ever thought that life not worth living
+#f.20485.0.0 : ever contemplated self-harm
+#f.20480.0.0 : "ever deliberately harmed yourself, whether or not you meant to end your life"
+#f.20481.0.0 : self-harmed in past year
+#f.20437.0.0 : thoughts about death during worst depression
+#f.20126.0.0 : bipolar and major depression status
+
+table(myData$f.20483.0.0) #suicide attempt
+freq(myData$f.20483.0.0)
+table(myData$f.20484.0.0) #suicide attempt in past year
+table(myData$f.20480.0.0) #ever deliberately harmed self
+table(myData$f.20481.0.0) #deliberately harmed self in past year
+table(myData$f.20485.0.0) #ever contemplated self-harm
+table(myData$f.20126.0.0) #mood disorder diagnosis
+
+#Compare suicide characteristics by group
+table(myData$f.20483.0.0, myData$f.20480.0.0) #ever deliberately harmed self
+chisq.test(myData$f.20483.0.0, myData$f.20480.0.0) #ever deliberately harmed self
+table(myData$f.20483.0.0, myData$f.20481.0.0) #deliberately harmed self in past year
+chisq.test(myData$f.20483.0.0, myData$f.20481.0.0) #deliberately harmed self in past year
+table(myData$f.20483.0.0, myData$f.20126.0.0) #mood disorder
+chisq.test(myData$f.20483.0.0, myData$f.20126.0.0) #mood disorder
+
+#apply(myData[c(“f.31.0.0”, “f.21000.0.0”, “f.20483.0.0”)], 2, freq, order=“freq”)
+
+#apply(myData[c(“age_at_asst3”, “f.21001.2.0”)], 2, describe)
+
+###exclude missing 
+COVAR <- covar[complete.cases(covar$f.21000.0.0),]
+#Remove do not know/prefer not to answer
+COVAR <- covar[!covar$f.21000.0.0 < 0,]
+nrow(COVAR)
+
+############################################Analyses###################################
+
+##Calculate mean strength variable
+#Step 1:create new variables with means
+
+myData$V1_mean <- ave(myData$V1)
+myData$V2_mean <- ave(myData$V2)
+myData$V3_mean <- ave(myData$V3)
+myData$V4_mean <- ave(myData$V4)
+myData$V5_mean <- ave(myData$V5)
+myData$V6_mean <- ave(myData$V6)
+myData$V7_mean <- ave(myData$V7)
+myData$V8_mean <- ave(myData$V8)
+myData$V9_mean <- ave(myData$V9)
+myData$V10_mean <- ave(myData$V10)
+myData$V11_mean <- ave(myData$V11)
+myData$V12_mean <- ave(myData$V12)
+myData$V13_mean <- ave(myData$V13)
+myData$V14_mean <- ave(myData$V14)
+myData$V15_mean <- ave(myData$V15)
+myData$V16_mean <- ave(myData$V16)
+myData$V17_mean <- ave(myData$V17)
+myData$V18_mean <- ave(myData$V18)
+myData$V19_mean <- ave(myData$V19)
+myData$V20_mean <- ave(myData$V20)
+myData$V21_mean <- ave(myData$V21)
+myData$V22_mean <- ave(myData$V22)
+myData$V23_mean <- ave(myData$V23)
+myData$V24_mean <- ave(myData$V24)
+myData$V25_mean <- ave(myData$V25)
+myData$V26_mean <- ave(myData$V26)
+myData$V27_mean <- ave(myData$V27)
+myData$V28_mean <- ave(myData$V28)
+myData$V29_mean <- ave(myData$V29)
+myData$V30_mean <- ave(myData$V30)
+myData$V31_mean <- ave(myData$V31)
+myData$V32_mean <- ave(myData$V32)
+myData$V33_mean <- ave(myData$V33)
+myData$V34_mean <- ave(myData$V34)
+myData$V35_mean <- ave(myData$V35)
+myData$V36_mean <- ave(myData$V36)
+myData$V37_mean <- ave(myData$V37)
+myData$V38_mean <- ave(myData$V38)
+myData$V39_mean <- ave(myData$V39)
+myData$V40_mean <- ave(myData$V40)
+myData$V41_mean <- ave(myData$V41)
+myData$V42_mean <- ave(myData$V42)
+myData$V43_mean <- ave(myData$V43)
+myData$V44_mean <- ave(myData$V44)
+myData$V45_mean <- ave(myData$V45)
+myData$V46_mean <- ave(myData$V46)
+myData$V47_mean <- ave(myData$V47)
+myData$V48_mean <- ave(myData$V48)
+myData$V49_mean <- ave(myData$V49)
+myData$V50_mean <- ave(myData$V50)
+myData$V51_mean <- ave(myData$V51)
+myData$V52_mean <- ave(myData$V52)
+myData$V53_mean <- ave(myData$V53)
+myData$V54_mean <- ave(myData$V54)
+myData$V55_mean <- ave(myData$V55)
+myData$V56_mean <- ave(myData$V56)
+myData$V57_mean <- ave(myData$V57)
+myData$V58_mean <- ave(myData$V58)
+myData$V59_mean <- ave(myData$V59)
+myData$V60_mean <- ave(myData$V60)
+myData$V61_mean <- ave(myData$V61)
+myData$V62_mean <- ave(myData$V62)
+myData$V63_mean <- ave(myData$V63)
+myData$V64_mean <- ave(myData$V64)
+myData$V65_mean <- ave(myData$V65)
+myData$V66_mean <- ave(myData$V66)
+myData$V67_mean <- ave(myData$V67)
+myData$V68_mean <- ave(myData$V68)
+myData$V69_mean <- ave(myData$V69)
+myData$V70_mean <- ave(myData$V70)
+myData$V71_mean <- ave(myData$V71)
+myData$V72_mean <- ave(myData$V72)
+myData$V73_mean <- ave(myData$V73)
+myData$V74_mean <- ave(myData$V74)
+myData$V75_mean <- ave(myData$V75)
+myData$V76_mean <- ave(myData$V76)
+myData$V77_mean <- ave(myData$V77)
+myData$V78_mean <- ave(myData$V78)
+myData$V79_mean <- ave(myData$V79)
+myData$V80_mean <- ave(myData$V80)
+myData$V81_mean <- ave(myData$V81)
+myData$V82_mean <- ave(myData$V82)
+myData$V83_mean <- ave(myData$V83)
+myData$V84_mean <- ave(myData$V84)
+myData$V85_mean <- ave(myData$V85)
+myData$V86_mean <- ave(myData$V86)
+myData$V87_mean <- ave(myData$V87)
+myData$V88_mean <- ave(myData$V88)
+myData$V89_mean <- ave(myData$V89)
+myData$V90_mean <- ave(myData$V90)
+myData$V91_mean <- ave(myData$V91)
+myData$V92_mean <- ave(myData$V92)
+myData$V93_mean <- ave(myData$V93)
+myData$V94_mean <- ave(myData$V94)
+myData$V95_mean <- ave(myData$V95)
+myData$V96_mean <- ave(myData$V96)
+myData$V97_mean <- ave(myData$V97)
+myData$V98_mean <- ave(myData$V98)
+myData$V99_mean <- ave(myData$V99)
+myData$V100_mean <- ave(myData$V100)
+myData$V101_mean <- ave(myData$V101)
+myData$V102_mean <- ave(myData$V102)
+myData$V103_mean <- ave(myData$V103)
+myData$V104_mean <- ave(myData$V104)
+myData$V105_mean <- ave(myData$V105)
+myData$V106_mean <- ave(myData$V106)
+myData$V107_mean <- ave(myData$V107)
+myData$V108_mean <- ave(myData$V108)
+myData$V109_mean <- ave(myData$V109)
+myData$V110_mean <- ave(myData$V110)
+myData$V111_mean <- ave(myData$V111)
+myData$V112_mean <- ave(myData$V112)
+myData$V113_mean <- ave(myData$V113)
+myData$V114_mean <- ave(myData$V114)
+myData$V115_mean <- ave(myData$V115)
+myData$V116_mean <- ave(myData$V116)
+myData$V117_mean <- ave(myData$V117)
+myData$V118_mean <- ave(myData$V118)
+myData$V119_mean <- ave(myData$V119)
+myData$V120_mean <- ave(myData$V120)
+myData$V121_mean <- ave(myData$V121)
+myData$V122_mean <- ave(myData$V122)
+myData$V123_mean <- ave(myData$V123)
+myData$V124_mean <- ave(myData$V124)
+myData$V125_mean <- ave(myData$V125)
+myData$V126_mean <- ave(myData$V126)
+myData$V127_mean <- ave(myData$V127)
+myData$V128_mean <- ave(myData$V128)
+myData$V129_mean <- ave(myData$V129)
+myData$V130_mean <- ave(myData$V130)
+myData$V131_mean <- ave(myData$V131)
+myData$V132_mean <- ave(myData$V132)
+myData$V133_mean <- ave(myData$V133)
+myData$V134_mean <- ave(myData$V134)
+myData$V135_mean <- ave(myData$V135)
+myData$V136_mean <- ave(myData$V136)
+myData$V137_mean <- ave(myData$V137)
+myData$V138_mean <- ave(myData$V138)
+myData$V139_mean <- ave(myData$V139)
+myData$V140_mean <- ave(myData$V140)
+myData$V141_mean <- ave(myData$V141)
+myData$V142_mean <- ave(myData$V142)
+myData$V143_mean <- ave(myData$V143)
+myData$V144_mean <- ave(myData$V144)
+myData$V145_mean <- ave(myData$V145)
+myData$V146_mean <- ave(myData$V146)
+myData$V147_mean <- ave(myData$V147)
+myData$V148_mean <- ave(myData$V148)
+myData$V149_mean <- ave(myData$V149)
+myData$V150_mean <- ave(myData$V150)
+myData$V151_mean <- ave(myData$V151)
+myData$V152_mean <- ave(myData$V152)
+myData$V153_mean <- ave(myData$V153)
+myData$V154_mean <- ave(myData$V154)
+myData$V155_mean <- ave(myData$V155)
+myData$V156_mean <- ave(myData$V156)
+myData$V157_mean <- ave(myData$V157)
+myData$V158_mean <- ave(myData$V158)
+myData$V159_mean <- ave(myData$V159)
+myData$V160_mean <- ave(myData$V160)
+myData$V161_mean <- ave(myData$V161)
+myData$V162_mean <- ave(myData$V162)
+myData$V163_mean <- ave(myData$V163)
+myData$V164_mean <- ave(myData$V164)
+myData$V165_mean <- ave(myData$V165)
+myData$V166_mean <- ave(myData$V166)
+myData$V167_mean <- ave(myData$V167)
+myData$V168_mean <- ave(myData$V168)
+myData$V169_mean <- ave(myData$V169)
+myData$V170_mean <- ave(myData$V170)
+myData$V171_mean <- ave(myData$V171)
+myData$V172_mean <- ave(myData$V172)
+myData$V173_mean <- ave(myData$V173)
+myData$V174_mean <- ave(myData$V174)
+myData$V175_mean <- ave(myData$V175)
+myData$V176_mean <- ave(myData$V176)
+myData$V177_mean <- ave(myData$V177)
+myData$V178_mean <- ave(myData$V178)
+myData$V179_mean <- ave(myData$V179)
+myData$V180_mean <- ave(myData$V180)
+myData$V181_mean <- ave(myData$V181)
+myData$V182_mean <- ave(myData$V182)
+myData$V183_mean <- ave(myData$V183)
+myData$V184_mean <- ave(myData$V184)
+myData$V185_mean <- ave(myData$V185)
+myData$V186_mean <- ave(myData$V186)
+myData$V187_mean <- ave(myData$V187)
+myData$V188_mean <- ave(myData$V188)
+myData$V189_mean <- ave(myData$V189)
+myData$V190_mean <- ave(myData$V190)
+myData$V191_mean <- ave(myData$V191)
+myData$V192_mean <- ave(myData$V192)
+myData$V193_mean <- ave(myData$V193)
+myData$V194_mean <- ave(myData$V194)
+myData$V195_mean <- ave(myData$V195)
+myData$V196_mean <- ave(myData$V196)
+myData$V197_mean <- ave(myData$V197)
+myData$V198_mean <- ave(myData$V198)
+myData$V199_mean <- ave(myData$V199)
+myData$V200_mean <- ave(myData$V200)
+myData$V201_mean <- ave(myData$V201)
+myData$V202_mean <- ave(myData$V202)
+myData$V203_mean <- ave(myData$V203)
+myData$V204_mean <- ave(myData$V204)
+myData$V205_mean <- ave(myData$V205)
+myData$V206_mean <- ave(myData$V206)
+myData$V207_mean <- ave(myData$V207)
+myData$V208_mean <- ave(myData$V208)
+myData$V209_mean <- ave(myData$V209)
+myData$V210_mean <- ave(myData$V210)
+
+#Step 2: multiply V1-V210 by the sign of the mean
+
+myData$V1_std <- ifelse(myData$V1_mean >= 0, (myData$V1*1), (myData$V1*-1))
+myData$V2_std <- ifelse(myData$V2_mean >= 0, (myData$V2*1), (myData$V2*-1))
+myData$V3_std <- ifelse(myData$V3_mean >= 0, (myData$V3*1), (myData$V3*-1))
+myData$V4_std <- ifelse(myData$V4_mean >= 0, (myData$V4*1), (myData$V4*-1))
+myData$V5_std <- ifelse(myData$V5_mean >= 0, (myData$V5*1), (myData$V5*-1))
+myData$V6_std <- ifelse(myData$V6_mean >= 0, (myData$V6*1), (myData$V6*-1))
+myData$V7_std <- ifelse(myData$V7_mean >= 0, (myData$V7*1), (myData$V7*-1))
+myData$V8_std <- ifelse(myData$V8_mean >= 0, (myData$V8*1), (myData$V8*-1))
+myData$V9_std <- ifelse(myData$V9_mean >= 0, (myData$V9*1), (myData$V9*-1))
+myData$V10_std <- ifelse(myData$V10_mean >= 0, (myData$V10*1), (myData$V10*-1))
+myData$V11_std <- ifelse(myData$V11_mean >= 0, (myData$V11*1), (myData$V11*-1))
+myData$V12_std <- ifelse(myData$V12_mean >= 0, (myData$V12*1), (myData$V12*-1))
+myData$V13_std <- ifelse(myData$V13_mean >= 0, (myData$V13*1), (myData$V13*-1))
+myData$V14_std <- ifelse(myData$V14_mean >= 0, (myData$V14*1), (myData$V14*-1))
+myData$V15_std <- ifelse(myData$V15_mean >= 0, (myData$V15*1), (myData$V15*-1))
+myData$V16_std <- ifelse(myData$V16_mean >= 0, (myData$V16*1), (myData$V16*-1))
+myData$V17_std <- ifelse(myData$V17_mean >= 0, (myData$V17*1), (myData$V17*-1))
+myData$V18_std <- ifelse(myData$V18_mean >= 0, (myData$V18*1), (myData$V18*-1))
+myData$V19_std <- ifelse(myData$V19_mean >= 0, (myData$V19*1), (myData$V19*-1))
+myData$V20_std <- ifelse(myData$V20_mean >= 0, (myData$V20*1), (myData$V20*-1))
+myData$V21_std <- ifelse(myData$V21_mean >= 0, (myData$V21*1), (myData$V21*-1))
+myData$V22_std <- ifelse(myData$V22_mean >= 0, (myData$V22*1), (myData$V22*-1))
+myData$V23_std <- ifelse(myData$V23_mean >= 0, (myData$V23*1), (myData$V23*-1))
+myData$V24_std <- ifelse(myData$V24_mean >= 0, (myData$V24*1), (myData$V24*-1))
+myData$V25_std <- ifelse(myData$V25_mean >= 0, (myData$V25*1), (myData$V25*-1))
+myData$V26_std <- ifelse(myData$V26_mean >= 0, (myData$V26*1), (myData$V26*-1))
+myData$V27_std <- ifelse(myData$V27_mean >= 0, (myData$V27*1), (myData$V27*-1))
+myData$V28_std <- ifelse(myData$V28_mean >= 0, (myData$V28*1), (myData$V28*-1))
+myData$V29_std <- ifelse(myData$V29_mean >= 0, (myData$V29*1), (myData$V29*-1))
+myData$V30_std <- ifelse(myData$V30_mean >= 0, (myData$V30*1), (myData$V30*-1))
+myData$V31_std <- ifelse(myData$V31_mean >= 0, (myData$V31*1), (myData$V31*-1))
+myData$V32_std <- ifelse(myData$V32_mean >= 0, (myData$V32*1), (myData$V32*-1))
+myData$V33_std <- ifelse(myData$V33_mean >= 0, (myData$V33*1), (myData$V33*-1))
+myData$V34_std <- ifelse(myData$V34_mean >= 0, (myData$V34*1), (myData$V34*-1))
+myData$V35_std <- ifelse(myData$V35_mean >= 0, (myData$V35*1), (myData$V35*-1))
+myData$V36_std <- ifelse(myData$V36_mean >= 0, (myData$V36*1), (myData$V36*-1))
+myData$V37_std <- ifelse(myData$V37_mean >= 0, (myData$V37*1), (myData$V37*-1))
+myData$V38_std <- ifelse(myData$V38_mean >= 0, (myData$V38*1), (myData$V38*-1))
+myData$V39_std <- ifelse(myData$V39_mean >= 0, (myData$V39*1), (myData$V39*-1))
+myData$V40_std <- ifelse(myData$V40_mean >= 0, (myData$V40*1), (myData$V40*-1))
+myData$V41_std <- ifelse(myData$V41_mean >= 0, (myData$V41*1), (myData$V41*-1))
+myData$V42_std <- ifelse(myData$V42_mean >= 0, (myData$V42*1), (myData$V42*-1))
+myData$V43_std <- ifelse(myData$V43_mean >= 0, (myData$V43*1), (myData$V43*-1))
+myData$V44_std <- ifelse(myData$V44_mean >= 0, (myData$V44*1), (myData$V44*-1))
+myData$V45_std <- ifelse(myData$V45_mean >= 0, (myData$V45*1), (myData$V45*-1))
+myData$V46_std <- ifelse(myData$V46_mean >= 0, (myData$V46*1), (myData$V46*-1))
+myData$V47_std <- ifelse(myData$V47_mean >= 0, (myData$V47*1), (myData$V47*-1))
+myData$V48_std <- ifelse(myData$V48_mean >= 0, (myData$V48*1), (myData$V48*-1))
+myData$V49_std <- ifelse(myData$V49_mean >= 0, (myData$V49*1), (myData$V49*-1))
+myData$V50_std <- ifelse(myData$V50_mean >= 0, (myData$V50*1), (myData$V50*-1))
+myData$V51_std <- ifelse(myData$V51_mean >= 0, (myData$V51*1), (myData$V51*-1))
+myData$V52_std <- ifelse(myData$V52_mean >= 0, (myData$V52*1), (myData$V52*-1))
+myData$V53_std <- ifelse(myData$V53_mean >= 0, (myData$V53*1), (myData$V53*-1))
+myData$V54_std <- ifelse(myData$V54_mean >= 0, (myData$V54*1), (myData$V54*-1))
+myData$V55_std <- ifelse(myData$V55_mean >= 0, (myData$V55*1), (myData$V55*-1))
+myData$V56_std <- ifelse(myData$V56_mean >= 0, (myData$V56*1), (myData$V56*-1))
+myData$V57_std <- ifelse(myData$V57_mean >= 0, (myData$V57*1), (myData$V57*-1))
+myData$V58_std <- ifelse(myData$V58_mean >= 0, (myData$V58*1), (myData$V58*-1))
+myData$V59_std <- ifelse(myData$V59_mean >= 0, (myData$V59*1), (myData$V59*-1))
+myData$V60_std <- ifelse(myData$V60_mean >= 0, (myData$V60*1), (myData$V60*-1))
+myData$V61_std <- ifelse(myData$V61_mean >= 0, (myData$V61*1), (myData$V61*-1))
+myData$V62_std <- ifelse(myData$V62_mean >= 0, (myData$V62*1), (myData$V62*-1))
+myData$V63_std <- ifelse(myData$V63_mean >= 0, (myData$V63*1), (myData$V63*-1))
+myData$V64_std <- ifelse(myData$V64_mean >= 0, (myData$V64*1), (myData$V64*-1))
+myData$V65_std <- ifelse(myData$V65_mean >= 0, (myData$V65*1), (myData$V65*-1))
+myData$V66_std <- ifelse(myData$V66_mean >= 0, (myData$V66*1), (myData$V66*-1))
+myData$V67_std <- ifelse(myData$V67_mean >= 0, (myData$V67*1), (myData$V67*-1))
+myData$V68_std <- ifelse(myData$V68_mean >= 0, (myData$V68*1), (myData$V68*-1))
+myData$V69_std <- ifelse(myData$V69_mean >= 0, (myData$V69*1), (myData$V69*-1))
+myData$V70_std <- ifelse(myData$V70_mean >= 0, (myData$V70*1), (myData$V70*-1))
+myData$V71_std <- ifelse(myData$V71_mean >= 0, (myData$V71*1), (myData$V71*-1))
+myData$V72_std <- ifelse(myData$V72_mean >= 0, (myData$V72*1), (myData$V72*-1))
+myData$V73_std <- ifelse(myData$V73_mean >= 0, (myData$V73*1), (myData$V73*-1))
+myData$V74_std <- ifelse(myData$V74_mean >= 0, (myData$V74*1), (myData$V74*-1))
+myData$V75_std <- ifelse(myData$V75_mean >= 0, (myData$V75*1), (myData$V75*-1))
+myData$V76_std <- ifelse(myData$V76_mean >= 0, (myData$V76*1), (myData$V76*-1))
+myData$V77_std <- ifelse(myData$V77_mean >= 0, (myData$V77*1), (myData$V77*-1))
+myData$V78_std <- ifelse(myData$V78_mean >= 0, (myData$V78*1), (myData$V78*-1))
+myData$V79_std <- ifelse(myData$V79_mean >= 0, (myData$V79*1), (myData$V79*-1))
+myData$V80_std <- ifelse(myData$V80_mean >= 0, (myData$V80*1), (myData$V80*-1))
+myData$V81_std <- ifelse(myData$V81_mean >= 0, (myData$V81*1), (myData$V81*-1))
+myData$V82_std <- ifelse(myData$V82_mean >= 0, (myData$V82*1), (myData$V82*-1))
+myData$V83_std <- ifelse(myData$V83_mean >= 0, (myData$V83*1), (myData$V83*-1))
+myData$V84_std <- ifelse(myData$V84_mean >= 0, (myData$V84*1), (myData$V84*-1))
+myData$V85_std <- ifelse(myData$V85_mean >= 0, (myData$V85*1), (myData$V85*-1))
+myData$V86_std <- ifelse(myData$V86_mean >= 0, (myData$V86*1), (myData$V86*-1))
+myData$V87_std <- ifelse(myData$V87_mean >= 0, (myData$V87*1), (myData$V87*-1))
+myData$V88_std <- ifelse(myData$V88_mean >= 0, (myData$V88*1), (myData$V88*-1))
+myData$V89_std <- ifelse(myData$V89_mean >= 0, (myData$V89*1), (myData$V89*-1))
+myData$V90_std <- ifelse(myData$V90_mean >= 0, (myData$V90*1), (myData$V90*-1))
+myData$V91_std <- ifelse(myData$V91_mean >= 0, (myData$V91*1), (myData$V91*-1))
+myData$V92_std <- ifelse(myData$V92_mean >= 0, (myData$V92*1), (myData$V92*-1))
+myData$V93_std <- ifelse(myData$V93_mean >= 0, (myData$V93*1), (myData$V93*-1))
+myData$V94_std <- ifelse(myData$V94_mean >= 0, (myData$V94*1), (myData$V94*-1))
+myData$V95_std <- ifelse(myData$V95_mean >= 0, (myData$V95*1), (myData$V95*-1))
+myData$V96_std <- ifelse(myData$V96_mean >= 0, (myData$V96*1), (myData$V96*-1))
+myData$V97_std <- ifelse(myData$V97_mean >= 0, (myData$V97*1), (myData$V97*-1))
+myData$V98_std <- ifelse(myData$V98_mean >= 0, (myData$V98*1), (myData$V98*-1))
+myData$V99_std <- ifelse(myData$V99_mean >= 0, (myData$V99*1), (myData$V99*-1))
+myData$V100_std <- ifelse(myData$V100_mean >= 0, (myData$V100*1), (myData$V100*-1))
+myData$V101_std <- ifelse(myData$V101_mean >= 0, (myData$V101*1), (myData$V101*-1))
+myData$V102_std <- ifelse(myData$V102_mean >= 0, (myData$V102*1), (myData$V102*-1))
+myData$V103_std <- ifelse(myData$V103_mean >= 0, (myData$V103*1), (myData$V103*-1))
+myData$V104_std <- ifelse(myData$V104_mean >= 0, (myData$V104*1), (myData$V104*-1))
+myData$V105_std <- ifelse(myData$V105_mean >= 0, (myData$V105*1), (myData$V105*-1))
+myData$V106_std <- ifelse(myData$V106_mean >= 0, (myData$V106*1), (myData$V106*-1))
+myData$V107_std <- ifelse(myData$V107_mean >= 0, (myData$V107*1), (myData$V107*-1))
+myData$V108_std <- ifelse(myData$V108_mean >= 0, (myData$V108*1), (myData$V108*-1))
+myData$V109_std <- ifelse(myData$V109_mean >= 0, (myData$V109*1), (myData$V109*-1))
+myData$V110_std <- ifelse(myData$V110_mean >= 0, (myData$V110*1), (myData$V110*-1))
+myData$V111_std <- ifelse(myData$V111_mean >= 0, (myData$V111*1), (myData$V111*-1))
+myData$V112_std <- ifelse(myData$V112_mean >= 0, (myData$V112*1), (myData$V112*-1))
+myData$V113_std <- ifelse(myData$V113_mean >= 0, (myData$V113*1), (myData$V113*-1))
+myData$V114_std <- ifelse(myData$V114_mean >= 0, (myData$V114*1), (myData$V114*-1))
+myData$V115_std <- ifelse(myData$V115_mean >= 0, (myData$V115*1), (myData$V115*-1))
+myData$V116_std <- ifelse(myData$V116_mean >= 0, (myData$V116*1), (myData$V116*-1))
+myData$V117_std <- ifelse(myData$V117_mean >= 0, (myData$V117*1), (myData$V117*-1))
+myData$V118_std <- ifelse(myData$V118_mean >= 0, (myData$V118*1), (myData$V118*-1))
+myData$V119_std <- ifelse(myData$V119_mean >= 0, (myData$V119*1), (myData$V119*-1))
+myData$V120_std <- ifelse(myData$V120_mean >= 0, (myData$V120*1), (myData$V120*-1))
+myData$V121_std <- ifelse(myData$V121_mean >= 0, (myData$V121*1), (myData$V121*-1))
+myData$V122_std <- ifelse(myData$V122_mean >= 0, (myData$V122*1), (myData$V122*-1))
+myData$V123_std <- ifelse(myData$V123_mean >= 0, (myData$V123*1), (myData$V123*-1))
+myData$V124_std <- ifelse(myData$V124_mean >= 0, (myData$V124*1), (myData$V124*-1))
+myData$V125_std <- ifelse(myData$V125_mean >= 0, (myData$V125*1), (myData$V125*-1))
+myData$V126_std <- ifelse(myData$V126_mean >= 0, (myData$V126*1), (myData$V126*-1))
+myData$V127_std <- ifelse(myData$V127_mean >= 0, (myData$V127*1), (myData$V127*-1))
+myData$V128_std <- ifelse(myData$V128_mean >= 0, (myData$V128*1), (myData$V128*-1))
+myData$V129_std <- ifelse(myData$V129_mean >= 0, (myData$V129*1), (myData$V129*-1))
+myData$V130_std <- ifelse(myData$V130_mean >= 0, (myData$V130*1), (myData$V130*-1))
+myData$V131_std <- ifelse(myData$V131_mean >= 0, (myData$V131*1), (myData$V131*-1))
+myData$V132_std <- ifelse(myData$V132_mean >= 0, (myData$V132*1), (myData$V132*-1))
+myData$V133_std <- ifelse(myData$V133_mean >= 0, (myData$V133*1), (myData$V133*-1))
+myData$V134_std <- ifelse(myData$V134_mean >= 0, (myData$V134*1), (myData$V134*-1))
+myData$V135_std <- ifelse(myData$V135_mean >= 0, (myData$V135*1), (myData$V135*-1))
+myData$V136_std <- ifelse(myData$V136_mean >= 0, (myData$V136*1), (myData$V136*-1))
+myData$V137_std <- ifelse(myData$V137_mean >= 0, (myData$V137*1), (myData$V137*-1))
+myData$V138_std <- ifelse(myData$V138_mean >= 0, (myData$V138*1), (myData$V138*-1))
+myData$V139_std <- ifelse(myData$V139_mean >= 0, (myData$V139*1), (myData$V139*-1))
+myData$V140_std <- ifelse(myData$V140_mean >= 0, (myData$V140*1), (myData$V140*-1))
+myData$V141_std <- ifelse(myData$V141_mean >= 0, (myData$V141*1), (myData$V141*-1))
+myData$V142_std <- ifelse(myData$V142_mean >= 0, (myData$V142*1), (myData$V142*-1))
+myData$V143_std <- ifelse(myData$V143_mean >= 0, (myData$V143*1), (myData$V143*-1))
+myData$V144_std <- ifelse(myData$V144_mean >= 0, (myData$V144*1), (myData$V144*-1))
+myData$V145_std <- ifelse(myData$V145_mean >= 0, (myData$V145*1), (myData$V145*-1))
+myData$V146_std <- ifelse(myData$V146_mean >= 0, (myData$V146*1), (myData$V146*-1))
+myData$V147_std <- ifelse(myData$V147_mean >= 0, (myData$V147*1), (myData$V147*-1))
+myData$V148_std <- ifelse(myData$V148_mean >= 0, (myData$V148*1), (myData$V148*-1))
+myData$V149_std <- ifelse(myData$V149_mean >= 0, (myData$V149*1), (myData$V149*-1))
+myData$V150_std <- ifelse(myData$V150_mean >= 0, (myData$V150*1), (myData$V150*-1))
+myData$V151_std <- ifelse(myData$V151_mean >= 0, (myData$V151*1), (myData$V151*-1))
+myData$V152_std <- ifelse(myData$V152_mean >= 0, (myData$V152*1), (myData$V152*-1))
+myData$V153_std <- ifelse(myData$V153_mean >= 0, (myData$V153*1), (myData$V153*-1))
+myData$V154_std <- ifelse(myData$V154_mean >= 0, (myData$V154*1), (myData$V154*-1))
+myData$V155_std <- ifelse(myData$V155_mean >= 0, (myData$V155*1), (myData$V155*-1))
+myData$V156_std <- ifelse(myData$V156_mean >= 0, (myData$V156*1), (myData$V156*-1))
+myData$V157_std <- ifelse(myData$V157_mean >= 0, (myData$V157*1), (myData$V157*-1))
+myData$V158_std <- ifelse(myData$V158_mean >= 0, (myData$V158*1), (myData$V158*-1))
+myData$V159_std <- ifelse(myData$V159_mean >= 0, (myData$V159*1), (myData$V159*-1))
+myData$V160_std <- ifelse(myData$V160_mean >= 0, (myData$V160*1), (myData$V160*-1))
+myData$V161_std <- ifelse(myData$V161_mean >= 0, (myData$V161*1), (myData$V161*-1))
+myData$V162_std <- ifelse(myData$V162_mean >= 0, (myData$V162*1), (myData$V162*-1))
+myData$V163_std <- ifelse(myData$V163_mean >= 0, (myData$V163*1), (myData$V163*-1))
+myData$V164_std <- ifelse(myData$V164_mean >= 0, (myData$V164*1), (myData$V164*-1))
+myData$V165_std <- ifelse(myData$V165_mean >= 0, (myData$V165*1), (myData$V165*-1))
+myData$V166_std <- ifelse(myData$V166_mean >= 0, (myData$V166*1), (myData$V166*-1))
+myData$V167_std <- ifelse(myData$V167_mean >= 0, (myData$V167*1), (myData$V167*-1))
+myData$V168_std <- ifelse(myData$V168_mean >= 0, (myData$V168*1), (myData$V168*-1))
+myData$V169_std <- ifelse(myData$V169_mean >= 0, (myData$V169*1), (myData$V169*-1))
+myData$V170_std <- ifelse(myData$V170_mean >= 0, (myData$V170*1), (myData$V170*-1))
+myData$V171_std <- ifelse(myData$V171_mean >= 0, (myData$V171*1), (myData$V171*-1))
+myData$V172_std <- ifelse(myData$V172_mean >= 0, (myData$V172*1), (myData$V172*-1))
+myData$V173_std <- ifelse(myData$V173_mean >= 0, (myData$V173*1), (myData$V173*-1))
+myData$V174_std <- ifelse(myData$V174_mean >= 0, (myData$V174*1), (myData$V174*-1))
+myData$V175_std <- ifelse(myData$V175_mean >= 0, (myData$V175*1), (myData$V175*-1))
+myData$V176_std <- ifelse(myData$V176_mean >= 0, (myData$V176*1), (myData$V176*-1))
+myData$V177_std <- ifelse(myData$V177_mean >= 0, (myData$V177*1), (myData$V177*-1))
+myData$V178_std <- ifelse(myData$V178_mean >= 0, (myData$V178*1), (myData$V178*-1))
+myData$V179_std <- ifelse(myData$V179_mean >= 0, (myData$V179*1), (myData$V179*-1))
+myData$V180_std <- ifelse(myData$V180_mean >= 0, (myData$V180*1), (myData$V180*-1))
+myData$V181_std <- ifelse(myData$V181_mean >= 0, (myData$V181*1), (myData$V181*-1))
+myData$V182_std <- ifelse(myData$V182_mean >= 0, (myData$V182*1), (myData$V182*-1))
+myData$V183_std <- ifelse(myData$V183_mean >= 0, (myData$V183*1), (myData$V183*-1))
+myData$V184_std <- ifelse(myData$V184_mean >= 0, (myData$V184*1), (myData$V184*-1))
+myData$V185_std <- ifelse(myData$V185_mean >= 0, (myData$V185*1), (myData$V185*-1))
+myData$V186_std <- ifelse(myData$V186_mean >= 0, (myData$V186*1), (myData$V186*-1))
+myData$V187_std <- ifelse(myData$V187_mean >= 0, (myData$V187*1), (myData$V187*-1))
+myData$V188_std <- ifelse(myData$V188_mean >= 0, (myData$V188*1), (myData$V188*-1))
+myData$V189_std <- ifelse(myData$V189_mean >= 0, (myData$V189*1), (myData$V189*-1))
+myData$V190_std <- ifelse(myData$V190_mean >= 0, (myData$V190*1), (myData$V190*-1))
+myData$V191_std <- ifelse(myData$V191_mean >= 0, (myData$V191*1), (myData$V191*-1))
+myData$V192_std <- ifelse(myData$V192_mean >= 0, (myData$V192*1), (myData$V192*-1))
+myData$V193_std <- ifelse(myData$V193_mean >= 0, (myData$V193*1), (myData$V193*-1))
+myData$V194_std <- ifelse(myData$V194_mean >= 0, (myData$V194*1), (myData$V194*-1))
+myData$V195_std <- ifelse(myData$V195_mean >= 0, (myData$V195*1), (myData$V195*-1))
+myData$V196_std <- ifelse(myData$V196_mean >= 0, (myData$V196*1), (myData$V196*-1))
+myData$V197_std <- ifelse(myData$V197_mean >= 0, (myData$V197*1), (myData$V197*-1))
+myData$V198_std <- ifelse(myData$V198_mean >= 0, (myData$V198*1), (myData$V198*-1))
+myData$V199_std <- ifelse(myData$V199_mean >= 0, (myData$V199*1), (myData$V199*-1))
+myData$V200_std <- ifelse(myData$V200_mean >= 0, (myData$V200*1), (myData$V200*-1))
+myData$V201_std <- ifelse(myData$V201_mean >= 0, (myData$V201*1), (myData$V201*-1))
+myData$V202_std <- ifelse(myData$V202_mean >= 0, (myData$V202*1), (myData$V202*-1))
+myData$V203_std <- ifelse(myData$V203_mean >= 0, (myData$V203*1), (myData$V203*-1))
+myData$V204_std <- ifelse(myData$V204_mean >= 0, (myData$V204*1), (myData$V204*-1))
+myData$V205_std <- ifelse(myData$V205_mean >= 0, (myData$V205*1), (myData$V205*-1))
+myData$V206_std <- ifelse(myData$V206_mean >= 0, (myData$V206*1), (myData$V206*-1))
+myData$V207_std <- ifelse(myData$V207_mean >= 0, (myData$V207*1), (myData$V207*-1))
+myData$V208_std <- ifelse(myData$V208_mean >= 0, (myData$V208*1), (myData$V208*-1))
+myData$V209_std <- ifelse(myData$V209_mean >= 0, (myData$V209*1), (myData$V209*-1))
+myData$V210_std <- ifelse(myData$V210_mean >= 0, (myData$V210*1), (myData$V210*-1))
+
+
+##AIM 1 - within-network functional connectivity
+# M-FPN components: 1, 7, 9, 14, 20
+	#variables: V16, V29, V79, V172, V35, V85, V178, V87, V180, V185
+# L-FPN components: 5, 16
+	#variable: V110
+# M-CIN components: 13, 18, 21
+	#variables: V149, V203, V208
+
+# M-FPN within-network rsfc between attemptors and nonattemptors
+mfpn.fit1 <- lm(myData$V16_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+mfpn.fit2 <- lm(myData$V29_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+mfpn.fit3 <- lm(myData$V79_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+mfpn.fit4 <- lm(myData$V172_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+mfpn.fit5 <- lm(myData$V35_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+mfpn.fit6 <- lm(myData$V85_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+mfpn.fit7 <- lm(myData$V178_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+mfpn.fit8 <- lm(myData$V87_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+mfpn.fit9 <- lm(myData$V180_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+mfpn.fit10 <- lm(myData$V185_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+
+summary(mfpn.fit1)
+lm.beta(mfpn.fit1)
+summary(mfpn.fit2)
+lm.beta(mfpn.fit2)
+summary(mfpn.fit3)
+lm.beta(mfpn.fit3)
+summary(mfpn.fit4)
+lm.beta(mfpn.fit4)
+summary(mfpn.fit5)
+lm.beta(mfpn.fit5)
+summary(mfpn.fit6)
+lm.beta(mfpn.fit6)
+summary(mfpn.fit7)
+lm.beta(mfpn.fit7)
+summary(mfpn.fit8)
+lm.beta(mfpn.fit8)
+summary(mfpn.fit9)
+lm.beta(mfpn.fit9)
+summary(mfpn.fit10)
+lm.beta(mfpn.fit10)
+
+# L-FPN within-network rsfc between attemptors and nonattemptors
+lfpn.fit1 <- lm(myData$V110_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+
+summary(lfpn.fit1)
+lm.beta(lfpn.fit1)
+
+# M-CIN within-network rsfc between attemptors and nonattemptors
+mcin.fit1 <- lm(myData$V149_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+mcin.fit2 <- lm(myData$V203_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+mcin.fit3 <- lm(myData$V208_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+
+summary(mcin.fit1)
+lm.beta(mcin.fit1)
+summary(mcin.fit2)
+lm.beta(mcin.fit2)
+summary(mcin.fit3)
+lm.beta(mcin.fit3)
+
+##AIM 2 - between-network functional connectivity
+# M-FPN components: 1, 7, 9, 14, 20
+# L-FPN components: 5, 16
+# M-CIN components: 13, 18, 21
+# M-FPN to L-FPN : V7, V106, V20, V33, V83, V176, V112, V114, V119, V187
+# M-FPN to M-CIN : V67, V137, V191, V73, V143, V197, V75, V145, V199, V91, V184, V150, V204, V189, V210
+# L-FPN to M-CIN : V71, V141, V195, V118, V152, V206
+
+# M-FPN to L-FPN between-network rsfc between attempters and nonattempters
+# M-FPN to L-FPN : V7, V106, V20, V33, V83, V176, V112, V114, V119, V187
+
+mfpn.lfpn.fit1 <- lm(myData$V7_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+mfpn.lfpn.fit2 <- lm(myData$V106_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+mfpn.lfpn.fit3 <- lm(myData$V20_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+mfpn.lfpn.fit4 <- lm(myData$V33_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+mfpn.lfpn.fit5 <- lm(myData$V83_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+mfpn.lfpn.fit6 <- lm(myData$V176_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+mfpn.lfpn.fit7 <- lm(myData$V112_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+mfpn.lfpn.fit8 <- lm(myData$V114_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+mfpn.lfpn.fit9 <- lm(myData$V119_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+mfpn.lfpn.fit10 <- lm(myData$V187_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+
+summary(mfpn.lfpn.fit1)
+lm.beta(mfpn.lfpn.fit1)
+summary(mfpn.lfpn.fit2)
+lm.beta(mfpn.lfpn.fit2)
+summary(mfpn.lfpn.fit3)
+lm.beta(mfpn.lfpn.fit3)
+summary(mfpn.lfpn.fit4)
+lm.beta(mfpn.lfpn.fit4)
+summary(mfpn.lfpn.fit5)
+lm.beta(mfpn.lfpn.fit5)
+summary(mfpn.lfpn.fit6)
+lm.beta(mfpn.lfpn.fit6)
+summary(mfpn.lfpn.fit7)
+lm.beta(mfpn.lfpn.fit7)
+summary(mfpn.lfpn.fit8)
+lm.beta(mfpn.lfpn.fit8)
+summary(mfpn.lfpn.fit9)
+lm.beta(mfpn.lfpn.fit9)
+summary(mfpn.lfpn.fit10)
+lm.beta(mfpn.lfpn.fit10)
+
+# M-FPN to M-CIN between network rsfc between attempters and nonattempters
+# M-FPN to M-CIN : V67, V137, V191, V73, V143, V197, V75, V145, V199, V91, V184, V150, V204, V189, V210
+
+mfpn.mcin.fit1 <- lm(myData$V67_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+mfpn.mcin.fit2 <- lm(myData$V137_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+mfpn.mcin.fit3 <- lm(myData$V191_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+mfpn.mcin.fit4 <- lm(myData$V73_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+mfpn.mcin.fit5 <- lm(myData$V143_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+mfpn.mcin.fit6 <- lm(myData$V197_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+mfpn.mcin.fit7 <- lm(myData$V75_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+mfpn.mcin.fit8 <- lm(myData$V145_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+mfpn.mcin.fit9 <- lm(myData$V199_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+mfpn.mcin.fit10 <- lm(myData$V91_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+mfpn.mcin.fit11 <- lm(myData$V84_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+mfpn.mcin.fit12 <- lm(myData$V150_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+mfpn.mcin.fit13 <- lm(myData$V204_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+mfpn.mcin.fit14 <- lm(myData$V189_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+mfpn.mcin.fit15 <- lm(myData$V210_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+
+summary(mfpn.mcin.fit1)
+lm.beta(mfpn.mcin.fit1)
+summary(mfpn.mcin.fit2)
+lm.beta(mfpn.mcin.fit2)
+summary(mfpn.mcin.fit3)
+lm.beta(mfpn.mcin.fit3)
+summary(mfpn.mcin.fit4)
+lm.beta(mfpn.mcin.fit4)
+summary(mfpn.mcin.fit5)
+lm.beta(mfpn.mcin.fit5)
+summary(mfpn.mcin.fit6)
+lm.beta(mfpn.mcin.fit6)
+summary(mfpn.mcin.fit7)
+lm.beta(mfpn.mcin.fit7)
+summary(mfpn.mcin.fit8)
+lm.beta(mfpn.mcin.fit8)
+summary(mfpn.mcin.fit9)
+lm.beta(mfpn.mcin.fit9)
+summary(mfpn.mcin.fit10)
+lm.beta(mfpn.mcin.fit10)
+summary(mfpn.mcin.fit11)
+lm.beta(mfpn.mcin.fit11)
+summary(mfpn.mcin.fit12)
+lm.beta(mfpn.mcin.fit12)
+summary(mfpn.mcin.fit13)
+lm.beta(mfpn.mcin.fit13)
+summary(mfpn.mcin.fit14)
+lm.beta(mfpn.mcin.fit14)
+summary(mfpn.mcin.fit15)
+lm.beta(mfpn.mcin.fit15)
+
+# L-FPN to M-CIN between network rsfc between attempters and nonattempters
+# L-FPN to M-CIN : V71, V141, V195, V118, V152, V206
+
+lfpn.mcin.fit1 <- lm(myData$V71_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+lfpn.mcin.fit2 <- lm(myData$V141_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+lfpn.mcin.fit3 <- lm(myData$V195_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+lfpn.mcin.fit4 <- lm(myData$V118_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+lfpn.mcin.fit5 <- lm(myData$V152_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+lfpn.mcin.fit6 <- lm(myData$V206_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+
+summary(lfpn.mcin.fit1)
+lm.beta(lfpn.mcin.fit1)
+summary(lfpn.mcin.fit2)
+lm.beta(lfpn.mcin.fit2)
+summary(lfpn.mcin.fit3)
+lm.beta(lfpn.mcin.fit3)
+summary(lfpn.mcin.fit4)
+lm.beta(lfpn.mcin.fit4)
+summary(lfpn.mcin.fit5)
+lm.beta(lfpn.mcin.fit5)
+summary(lfpn.mcin.fit6)
+lm.beta(lfpn.mcin.fit6)
+
+###################AIM 3 - Exploratory Networks
+#Numbered by component number
+
+expl.fit1 <- lm(myData$V1_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit2 <- lm(myData$V2_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit3 <- lm(myData$V3_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit4 <- lm(myData$V4_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit5 <- lm(myData$V5_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit6 <- lm(myData$V6_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit8 <- lm(myData$V8_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit9 <- lm(myData$V9_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit10 <- lm(myData$V10_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit11 <- lm(myData$V11_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit12 <- lm(myData$V12_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit13 <- lm(myData$V13_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit14 <- lm(myData$V14_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit15 <- lm(myData$V15_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit17 <- lm(myData$V17_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+
+expl.fit18 <- lm(myData$V18_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit19 <- lm(myData$V9_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit21 <- lm(myData$V21_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit22 <- lm(myData$V22_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit23 <- lm(myData$V23_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit24 <- lm(myData$V24_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit25 <- lm(myData$V25_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit26 <- lm(myData$V26_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit27 <- lm(myData$V27_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit28 <- lm(myData$V28_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit30 <- lm(myData$V30_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit31 <- lm(myData$V31_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit32 <- lm(myData$V32_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit34 <- lm(myData$V34_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit36 <- lm(myData$V36_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+
+expl.fit37 <- lm(myData$V37_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit38 <- lm(myData$V38_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit39 <- lm(myData$V39_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit40 <- lm(myData$V40_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit41 <- lm(myData$V41_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit42 <- lm(myData$V42_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit43 <- lm(myData$V43_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit44 <- lm(myData$V44_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit45 <- lm(myData$V45_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit46 <- lm(myData$V46_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit47 <- lm(myData$V47_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit48 <- lm(myData$V48_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit49 <- lm(myData$V49_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit50 <- lm(myData$V50_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit51 <- lm(myData$V51_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+
+expl.fit52 <- lm(myData$V52_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit53 <- lm(myData$V53_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit54 <- lm(myData$V54_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit55 <- lm(myData$V55_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit56 <- lm(myData$V56_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit57 <- lm(myData$V57_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit58 <- lm(myData$V58_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit59 <- lm(myData$V59_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit60 <- lm(myData$V60_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit61 <- lm(myData$V61_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit62 <- lm(myData$V62_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit63 <- lm(myData$V63_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit64 <- lm(myData$V64_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit65 <- lm(myData$V65_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit66 <- lm(myData$V66_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+
+expl.fit52 <- lm(myData$V52_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit53 <- lm(myData$V53_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit54 <- lm(myData$V54_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit55 <- lm(myData$V55_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit56 <- lm(myData$V56_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit57 <- lm(myData$V57_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit58 <- lm(myData$V58_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit59 <- lm(myData$V59_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit60 <- lm(myData$V60_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit61 <- lm(myData$V61_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit62 <- lm(myData$V62_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit63 <- lm(myData$V63_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit64 <- lm(myData$V64_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit65 <- lm(myData$V65_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit66 <- lm(myData$V66_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+
+expl.fit68 <- lm(myData$V68_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit69 <- lm(myData$V69_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit70 <- lm(myData$V70_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit72 <- lm(myData$V72_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit74 <- lm(myData$V74_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit76 <- lm(myData$V76_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit77 <- lm(myData$V77_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit78 <- lm(myData$V78_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit80 <- lm(myData$V80_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit81 <- lm(myData$V81_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit82 <- lm(myData$V82_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit84 <- lm(myData$V84_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit86 <- lm(myData$V86_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit88 <- lm(myData$V88_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit89 <- lm(myData$V89_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+
+expl.fit90 <- lm(myData$V90_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit92 <- lm(myData$V92_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit93 <- lm(myData$V93_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit94 <- lm(myData$V94_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit95 <- lm(myData$V95_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit96 <- lm(myData$V96_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit97 <- lm(myData$V97_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit98 <- lm(myData$V98_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit99 <- lm(myData$V99_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit100 <- lm(myData$V100_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit101 <- lm(myData$V101_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit102 <- lm(myData$V102_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit103 <- lm(myData$V103_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit104 <- lm(myData$V104_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit105 <- lm(myData$V105_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+
+expl.fit107 <- lm(myData$V107_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit108 <- lm(myData$V108_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit109 <- lm(myData$V109_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit111 <- lm(myData$V111_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit113 <- lm(myData$V113_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit115 <- lm(myData$V115_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit116 <- lm(myData$V116_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit117 <- lm(myData$V117_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit120 <- lm(myData$V120_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit121 <- lm(myData$V121_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit122 <- lm(myData$V122_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit123 <- lm(myData$V123_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit124 <- lm(myData$V124_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit125 <- lm(myData$V125_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit126 <- lm(myData$V126_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+
+expl.fit127 <- lm(myData$V127_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit128 <- lm(myData$V128_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit129 <- lm(myData$V129_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit130 <- lm(myData$V130_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit131 <- lm(myData$V131_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit132 <- lm(myData$V132_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit133 <- lm(myData$V133_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit134 <- lm(myData$V134_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit135 <- lm(myData$V135_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit136 <- lm(myData$V136_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit138 <- lm(myData$V138_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit139 <- lm(myData$V139_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit140 <- lm(myData$V140_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit142 <- lm(myData$V142_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit144 <- lm(myData$V144_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+
+expl.fit146 <- lm(myData$V146_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit147 <- lm(myData$V147_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit148 <- lm(myData$V148_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit151 <- lm(myData$V151_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit153 <- lm(myData$V153_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit154 <- lm(myData$V154_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit155 <- lm(myData$V155_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit156 <- lm(myData$V156_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit157 <- lm(myData$V157_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit158 <- lm(myData$V158_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit159 <- lm(myData$V159_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit160 <- lm(myData$V160_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit161 <- lm(myData$V161_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit162 <- lm(myData$V162_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit163 <- lm(myData$V163_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+
+expl.fit164 <- lm(myData$V164_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit165 <- lm(myData$V165_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit166 <- lm(myData$V166_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit167 <- lm(myData$V167_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit168 <- lm(myData$V168_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit169 <- lm(myData$V169_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit170 <- lm(myData$V170_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit171 <- lm(myData$V171_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit173 <- lm(myData$V173_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit174 <- lm(myData$V174_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit175 <- lm(myData$V175_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit177 <- lm(myData$V177_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit179 <- lm(myData$V179_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit181 <- lm(myData$V181_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit182 <- lm(myData$V182_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+
+expl.fit183 <- lm(myData$V183_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit186 <- lm(myData$V186_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit188 <- lm(myData$V188_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit190 <- lm(myData$V190_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit192 <- lm(myData$V192_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit193 <- lm(myData$V193_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit194 <- lm(myData$V194_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit196 <- lm(myData$V196_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit198 <- lm(myData$V198_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit200 <- lm(myData$V200_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit201 <- lm(myData$V201_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit202 <- lm(myData$V202_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit205 <- lm(myData$V205_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit207 <- lm(myData$V207_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+expl.fit209 <- lm(myData$V209_std~myData$f.20483.0.0 + myData$f.31.0.0 + myData$age_at_asst1
+	+ myData$f.21001.0.0 + myData$f.21000.0.0)
+
+
+summary(expl.fit1)
+lm.beta(expl.fit1)
+summary(expl.fit2)
+lm.beta(expl.fit2)
+summary(expl.fit3)
+lm.beta(expl.fit3)
+summary(expl.fit4)
+lm.beta(expl.fit4)
+summary(expl.fit5)
+lm.beta(expl.fit5)
+summary(expl.fit6)
+lm.beta(expl.fit6)
+summary(expl.fit8)
+lm.beta(expl.fit8)
+summary(expl.fit9)
+lm.beta(expl.fit9)
+summary(expl.fit10)
+lm.beta(expl.fit10)
+summary(expl.fit11)
+lm.beta(expl.fit11)
+summary(expl.fit12)
+lm.beta(expl.fit12)
+summary(expl.fit13)
+lm.beta(expl.fit13)
+summary(expl.fit14)
+lm.beta(expl.fit14)
+summary(expl.fit15)
+lm.beta(expl.fit15)
+summary(expl.fit17)
+lm.beta(expl.fit17)
+
+summary(expl.fit18)
+lm.beta(expl.fit18)
+summary(expl.fit19)
+lm.beta(expl.fit19)
+summary(expl.fit21)
+lm.beta(expl.fit21)
+summary(expl.fit22)
+lm.beta(expl.fit22)
+summary(expl.fit23)
+lm.beta(expl.fit23)
+summary(expl.fit24)
+lm.beta(expl.fit24)
+summary(expl.fit25)
+lm.beta(expl.fit25)
+summary(expl.fit26)
+lm.beta(expl.fit26)
+summary(expl.fit27)
+lm.beta(expl.fit27)
+summary(expl.fit28)
+lm.beta(expl.fit28)
+summary(expl.fit30)
+lm.beta(expl.fit30)
+summary(expl.fit31)
+lm.beta(expl.fit31)
+summary(expl.fit32)
+lm.beta(expl.fit32)
+summary(expl.fit34)
+lm.beta(expl.fit34)
+summary(expl.fit36)
+lm.beta(expl.fit36)
+
+summary(expl.fit37)
+lm.beta(expl.fit37)
+summary(expl.fit38)
+lm.beta(expl.fit38)
+summary(expl.fit39)
+lm.beta(expl.fit39)
+summary(expl.fit40)
+lm.beta(expl.fit40)
+summary(expl.fit41)
+lm.beta(expl.fit41)
+summary(expl.fit42)
+lm.beta(expl.fit42)
+summary(expl.fit43)
+lm.beta(expl.fit43)
+summary(expl.fit44)
+lm.beta(expl.fit44)
+summary(expl.fit45)
+lm.beta(expl.fit45)
+summary(expl.fit46)
+lm.beta(expl.fit46)
+summary(expl.fit47)
+lm.beta(expl.fit47)
+summary(expl.fit48)
+lm.beta(expl.fit48)
+summary(expl.fit49)
+lm.beta(expl.fit49)
+summary(expl.fit50)
+lm.beta(expl.fit50)
+summary(expl.fit51)
+lm.beta(expl.fit51)
+
+summary(expl.fit52)
+lm.beta(expl.fit52)
+summary(expl.fit53)
+lm.beta(expl.fit53)
+summary(expl.fit54)
+lm.beta(expl.fit54)
+summary(expl.fit55)
+lm.beta(expl.fit55)
+summary(expl.fit56)
+lm.beta(expl.fit56)
+summary(expl.fit57)
+lm.beta(expl.fit57)
+summary(expl.fit58)
+lm.beta(expl.fit58)
+summary(expl.fit59)
+lm.beta(expl.fit59)
+summary(expl.fit60)
+lm.beta(expl.fit60)
+summary(expl.fit61)
+lm.beta(expl.fit61)
+summary(expl.fit62)
+lm.beta(expl.fit62)
+summary(expl.fit63)
+lm.beta(expl.fit63)
+summary(expl.fit64)
+lm.beta(expl.fit64)
+summary(expl.fit65)
+lm.beta(expl.fit65)
+summary(expl.fit66)
+lm.beta(expl.fit66)
+
+summary(expl.fit68)
+lm.beta(expl.fit68)
+summary(expl.fit69)
+lm.beta(expl.fit69)
+summary(expl.fit70)
+lm.beta(expl.fit70)
+summary(expl.fit72)
+lm.beta(expl.fit72)
+summary(expl.fit74)
+lm.beta(expl.fit74)
+summary(expl.fit76)
+lm.beta(expl.fit76)
+summary(expl.fit77)
+lm.beta(expl.fit77)
+summary(expl.fit78)
+lm.beta(expl.fit78)
+summary(expl.fit80)
+lm.beta(expl.fit80)
+summary(expl.fit81)
+lm.beta(expl.fit81)
+summary(expl.fit82)
+lm.beta(expl.fit82)
+summary(expl.fit84)
+lm.beta(expl.fit84)
+summary(expl.fit86)
+lm.beta(expl.fit86)
+summary(expl.fit88)
+lm.beta(expl.fit88)
+summary(expl.fit89)
+lm.beta(expl.fit89)
+
+summary(expl.fit90)
+lm.beta(expl.fit90)
+summary(expl.fit92)
+lm.beta(expl.fit92)
+summary(expl.fit93)
+lm.beta(expl.fit93)
+summary(expl.fit94)
+lm.beta(expl.fit94)
+summary(expl.fit95)
+lm.beta(expl.fit95)
+summary(expl.fit96)
+lm.beta(expl.fit96)
+summary(expl.fit97)
+lm.beta(expl.fit97)
+summary(expl.fit98)
+lm.beta(expl.fit98)
+summary(expl.fit99)
+lm.beta(expl.fit99)
+summary(expl.fit100)
+lm.beta(expl.fit100)
+summary(expl.fit101)
+lm.beta(expl.fit101)
+summary(expl.fit102)
+lm.beta(expl.fit102)
+summary(expl.fit103)
+lm.beta(expl.fit103)
+summary(expl.fit104)
+lm.beta(expl.fit104)
+summary(expl.fit105)
+lm.beta(expl.fit105)
+
+summary(expl.fit107)
+lm.beta(expl.fit107)
+summary(expl.fit108)
+lm.beta(expl.fit108)
+summary(expl.fit109)
+lm.beta(expl.fit109)
+summary(expl.fit111)
+lm.beta(expl.fit111)
+summary(expl.fit113)
+lm.beta(expl.fit113)
+summary(expl.fit115)
+lm.beta(expl.fit115)
+summary(expl.fit116)
+lm.beta(expl.fit116)
+summary(expl.fit117)
+lm.beta(expl.fit117)
+summary(expl.fit120)
+lm.beta(expl.fit120)
+summary(expl.fit121)
+lm.beta(expl.fit121)
+summary(expl.fit122)
+lm.beta(expl.fit122)
+summary(expl.fit123)
+lm.beta(expl.fit123)
+summary(expl.fit124)
+lm.beta(expl.fit124)
+summary(expl.fit125)
+lm.beta(expl.fit125)
+summary(expl.fit126)
+lm.beta(expl.fit126)
+
+summary(expl.fit127)
+lm.beta(expl.fit127)
+summary(expl.fit128)
+lm.beta(expl.fit128)
+summary(expl.fit129)
+lm.beta(expl.fit129)
+summary(expl.fit130)
+lm.beta(expl.fit130)
+summary(expl.fit131)
+lm.beta(expl.fit131)
+summary(expl.fit132)
+lm.beta(expl.fit132)
+summary(expl.fit133)
+lm.beta(expl.fit133)
+summary(expl.fit134)
+lm.beta(expl.fit134)
+summary(expl.fit135)
+lm.beta(expl.fit135)
+summary(expl.fit136)
+lm.beta(expl.fit136)
+summary(expl.fit138)
+lm.beta(expl.fit138)
+summary(expl.fit139)
+lm.beta(expl.fit139)
+summary(expl.fit140)
+lm.beta(expl.fit140)
+summary(expl.fit142)
+lm.beta(expl.fit142)
+summary(expl.fit144)
+lm.beta(expl.fit144)
+
+summary(expl.fit146)
+lm.beta(expl.fit146)
+summary(expl.fit147)
+lm.beta(expl.fit147)
+summary(expl.fit148)
+lm.beta(expl.fit148)
+summary(expl.fit151)
+lm.beta(expl.fit151)
+summary(expl.fit153)
+lm.beta(expl.fit153)
+summary(expl.fit154)
+lm.beta(expl.fit154)
+summary(expl.fit155)
+lm.beta(expl.fit155)
+summary(expl.fit156)
+lm.beta(expl.fit156)
+summary(expl.fit157)
+lm.beta(expl.fit157)
+summary(expl.fit158)
+lm.beta(expl.fit158)
+summary(expl.fit159)
+lm.beta(expl.fit159)
+summary(expl.fit160)
+lm.beta(expl.fit160)
+summary(expl.fit161)
+lm.beta(expl.fit161)
+summary(expl.fit162)
+lm.beta(expl.fit162)
+summary(expl.fit163)
+lm.beta(expl.fit163)
+
+summary(expl.fit164)
+lm.beta(expl.fit164)
+summary(expl.fit165)
+lm.beta(expl.fit165)
+summary(expl.fit166)
+lm.beta(expl.fit166)
+summary(expl.fit167)
+lm.beta(expl.fit167)
+summary(expl.fit168)
+lm.beta(expl.fit168)
+summary(expl.fit169)
+lm.beta(expl.fit169)
+summary(expl.fit170)
+lm.beta(expl.fit170)
+summary(expl.fit171)
+lm.beta(expl.fit171)
+summary(expl.fit173)
+lm.beta(expl.fit173)
+summary(expl.fit174)
+lm.beta(expl.fit174)
+summary(expl.fit175)
+lm.beta(expl.fit175)
+summary(expl.fit177)
+lm.beta(expl.fit177)
+summary(expl.fit179)
+lm.beta(expl.fit179)
+summary(expl.fit181)
+lm.beta(expl.fit181)
+summary(expl.fit182)
+lm.beta(expl.fit182)
+
+summary(expl.fit183)
+lm.beta(expl.fit183)
+summary(expl.fit186)
+lm.beta(expl.fit186)
+summary(expl.fit188)
+lm.beta(expl.fit188)
+summary(expl.fit190)
+lm.beta(expl.fit190)
+summary(expl.fit192)
+lm.beta(expl.fit192)
+summary(expl.fit193)
+lm.beta(expl.fit193)
+summary(expl.fit194)
+lm.beta(expl.fit194)
+summary(expl.fit196)
+lm.beta(expl.fit196)
+summary(expl.fit198)
+lm.beta(expl.fit198)
+summary(expl.fit200)
+lm.beta(expl.fit200)
+summary(expl.fit201)
+lm.beta(expl.fit201)
+summary(expl.fit202)
+lm.beta(expl.fit202)
+summary(expl.fit205)
+lm.beta(expl.fit205)
+summary(expl.fit207)
+lm.beta(expl.fit207)
+summary(expl.fit209)
+lm.beta(expl.fit209)
+
+
+
+######################################FDR Correction###################################
+
+library(data.table)
+library(stats)
+
+setwd("C:XX")
+
+# load data
+pvals <- fread("XX.txt")
+
+#convert to matrix
+pvalmatrix <- as.matrix(pvals)
+
+#run p.adjust to generate adjusted pvalues [https://stat.ethz.ch/R-manual/R-devel/library/stats/html/p.adjust.html]
+adjpval <- p.adjust(pvalmatrix, "fdr")
+
+write.csv(adjpval, file="XX.csv", row.names=FALSE)
